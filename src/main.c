@@ -24,6 +24,30 @@ static char destination[MAX_PATH],source[MAX_PATH];
 static char existing[8][32]; static int existing_count=0;
 static vita2d_pgf *font;
 static void line(int y,const char *s,uint32_t color) {vita2d_pgf_draw_text(font,35,y,color,1.1f,s);}
+#define RGBA(r,g,b,a) ((uint32_t)(r)|((uint32_t)(g)<<8)|((uint32_t)(b)<<16)|((uint32_t)(a)<<24))
+static void label_at(int x,int y,float size,const char *s,uint32_t color){vita2d_pgf_draw_text(font,x,y,color,size,s);}
+static void rect(int x,int y,int w,int h,uint32_t color){vita2d_draw_rectangle(x,y,w,h,color);}
+static void trim_label(char *out,size_t cap,const char *in,size_t limit){
+ size_t n=strlen(in);if(limit>=cap)limit=cap-1;
+ if(n<=limit){snprintf(out,cap,"%s",in);return;}
+ if(limit<5){snprintf(out,cap,"...");return;}
+ memcpy(out,in,limit-3);memcpy(out+limit-3,"...",3);out[limit]=0;
+}
+static void panel(int x,int y,int w,int h){rect(x,y,w,h,RGBA(27,33,46,255));}
+static void header(const char *subtitle){
+ rect(0,0,960,544,RGBA(15,20,30,255));
+ rect(0,0,960,7,RGBA(65,190,215,255));
+ label_at(36,47,1.55f,"VITA COVER CONVERTER",RGBA(245,248,252,255));
+ label_at(38,76,0.88f,subtitle,RGBA(154,169,185,255));
+ rect(36,94,888,2,RGBA(52,65,81,255));
+}
+static void footer(const char *hint){
+ rect(0,480,960,64,RGBA(21,27,38,255));
+ rect(0,479,960,1,RGBA(52,65,81,255));
+ label_at(37,505,0.85f,hint,RGBA(109,211,230,255));
+ char short_status[116];trim_label(short_status,sizeof(short_status),status,110);
+ label_at(37,530,0.76f,short_status,RGBA(184,195,205,255));
+}
 static int ends_mp3(const char *s) {size_t n=strlen(s);return n>4 && !strcasecmp(s+n-4,".mp3");}
 static void scan(void) {
   count=0;selected=0;
@@ -167,23 +191,44 @@ int main(void){
    if(pressed&SCE_CTRL_CROSS)save();
   }
   vita2d_start_drawing();vita2d_clear_screen();
-  line(50,"VITA COVER CONVERTER",0xffffffff);
-  line(86,"Source: " SOURCE,0xffbbbbbb);
+  header(step?"02  /  CONFIRM DESTINATION":"01  /  SELECT MP3");
   if(!step){
-   for(int i=selected-3<0?0:selected-3,j=0;i<count&&j<9;i++,j++){
-    char row[320];snprintf(row,sizeof(row),"%c %s",i==selected?'>':' ',files[i]);
-    line(130+j*32,row,i==selected?0xff55ddff:0xffffffff);
+   panel(35,112,890,348);
+   label_at(53,141,0.86f,"SOURCE  ux0:data/VitaSend/received",RGBA(163,181,196,255));
+   label_at(845,141,0.85f,"MP3",RGBA(109,211,230,255));
+   rect(52,151,856,1,RGBA(53,64,79,255));
+   if(!count)label_at(56,215,1.0f,"No MP3 files found in the source folder.",RGBA(230,235,242,255));
+   int first=selected-4;if(first<0)first=0;
+   if(first>count-8)first=count-8;if(first<0)first=0;
+   for(int j=0;j<8&&first+j<count;j++){
+    int i=first+j,y=158+j*36;
+    if(i==selected){rect(48,y,864,33,RGBA(37,80,98,255));rect(48,y,4,33,RGBA(100,218,238,255));}
+    char name[100];trim_label(name,sizeof(name),files[i],75);
+    label_at(65,y+23,0.91f,name,i==selected?RGBA(255,255,255,255):RGBA(190,201,214,255));
    }
+   char counter[60];snprintf(counter,sizeof(counter),"%d FILES   |   %d / %d",count,count?selected+1:0,count);
+   label_at(710,448,0.79f,counter,RGBA(154,169,185,255));
+   footer("UP / DOWN  Browse      X  Select      O  Exit");
   }else{
-   line(145,"Destination preview:",0xff55ddff);
-   line(180,DEST,0xffffffff);
-   line(215,destination,0xffffffff);
-   line(260,"Existing folders (up to 8):",0xffdddddd);
-   for(int k=0;k<existing_count;k++)line(286+k*21,existing[k],0xffaaaaaa);
-   
-   line(460,"X Confirm / Circle Cancel",0xff55ddff);
+   panel(35,112,890,348);
+   label_at(55,145,0.9f,"SELECTED TRACK",RGBA(109,211,230,255));
+   char track[100];trim_label(track,sizeof(track),files[selected],76);
+   label_at(55,172,1.04f,track,RGBA(248,250,252,255));
+   rect(52,188,856,1,RGBA(53,64,79,255));
+   label_at(55,219,0.86f,"SAVE LOCATION",RGBA(109,211,230,255));
+   label_at(55,245,0.94f,DEST,RGBA(235,240,246,255));
+   char folder[40];snprintf(folder,sizeof(folder),"Track%04d",number);
+   rect(54,260,852,43,RGBA(36,76,89,255));
+   label_at(69,288,1.1f,folder,RGBA(255,255,255,255));
+   label_at(55,333,0.84f,"EXISTING TRACK FOLDERS",RGBA(160,179,196,255));
+   if(!existing_count)label_at(55,363,0.87f,"No existing folders found",RGBA(183,192,203,255));
+   for(int k=0;k<existing_count&&k<8;k++){
+    int x=55+(k%4)*214,y=365+(k/4)*35;
+    label_at(x,y,0.85f,existing[k],RGBA(220,228,237,255));
+   }
+   label_at(55,446,0.8f,"MP3 + cover.jpg  |  No source files changed",RGBA(157,174,190,255));
+   footer("X  Confirm and save      O  Back");
   }
-  line(480,status,0xffdddddd);
   vita2d_end_drawing();vita2d_swap_buffers();
  }
  vita2d_free_pgf(font);vita2d_fini();sceKernelExitProcess(0);return 0;
