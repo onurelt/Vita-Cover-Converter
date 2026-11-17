@@ -1,0 +1,21 @@
+name: Build Vita VPK
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: vitasdk/vitasdk:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: vdpm install libvita2d libjpeg-turbo libpng
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
+      - name: Build
+        run: cmake --build build --parallel 2
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VitaCoverConverter-VPK
+          path: build/VitaCoverConverter.vpk
