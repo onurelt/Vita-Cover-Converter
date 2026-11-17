@@ -4,8 +4,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <setjmp.h>
+#ifndef VCC_EXTRACT_ONLY
 #include <png.h>
 #include <jpeglib.h>
+#endif
 
 /* Limit ID3 allocation and decoded image memory on the Vita. */
 #define TAG_LIMIT (16u * 1024u * 1024u)
@@ -84,6 +86,7 @@ done:
   free(tag);fclose(f);return rc;
 }
 
+#ifndef VCC_EXTRACT_ONLY
 typedef struct {struct jpeg_error_mgr base; jmp_buf jump;} JErr;
 static void jpeg_error(j_common_ptr ptr){longjmp(((JErr*)ptr->err)->jump,1);}
 int vcc_png_to_jpeg(const char *input, const char *output){
@@ -118,3 +121,5 @@ done:
   if(ok)remove(output);
   png_image_free(&pic);free(src);free(dst);return ok;
 }
+
+#endif /* VCC_EXTRACT_ONLY */

@@ -15,6 +15,10 @@ jobs:
         run: |
           cc -std=c11 -Wall -Wextra -Werror -Isrc tests/core_test.c -o /tmp/core_test
           /tmp/core_test
+      - name: Test JPEG/PNG ID3 extraction, versions 2.2 through 2.4
+        run: |
+          cc -DVCC_EXTRACT_ONLY -std=c11 -Wall -Wextra -Werror -Isrc src/artwork.c tests/artwork_test.c -o /tmp/artwork_test
+          /tmp/artwork_test
       - name: Generate new Vita icon and LiveArea artwork
         run: python3 tools/make_assets.py
       - name: Configure
@@ -24,12 +28,21 @@ jobs:
       - name: Verify installable VPK archive
         run: |
           python3 - <<'PY'
-          import zipfile
+          import zipfile, struct
           path="build/VitaCoverConverter.vpk"
           with zipfile.ZipFile(path) as z:
               names=set(z.namelist())
               expected={"eboot.bin","sce_sys/icon0.png","sce_sys/pic0.png","sce_sys/livearea/contents/bg0.png","sce_sys/livearea/contents/startup.png","sce_sys/livearea/contents/template.xml"}
               assert expected<=names, f"Missing VPK entries: {expected-names}"
+              dims={"sce_sys/icon0.png":(128,128),"sce_sys/pic0.png":(960,544),
+                    "sce_sys/livearea/contents/bg0.png":(840,500),
+                    "sce_sys/livearea/contents/startup.png":(280,158)}
+              for name,size in dims.items():
+                  data=z.read(name)
+                  assert data[:8]==bytes((137,80,78,71,13,10,26,10)),name
+                  width,height,depth,colour=struct.unpack(">IIBB",data[16:26])
+                  assert (width,height)==size,(name,width,height,size)
+                  assert depth==8 and colour==3,(name,depth,colour)
               for item in sorted(expected):print(item)
           PY
       - uses: actions/upload-artifact@v4
