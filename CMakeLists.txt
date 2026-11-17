@@ -11,7 +11,7 @@ target_include_directories(vita-cover-converter PRIVATE src)
 target_link_libraries(vita-cover-converter
   vita2d SceCtrl_stub SceTouch_stub SceDisplay_stub SceGxm_stub
   SceSysmodule_stub SceAppMgr_stub SceCommonDialog_stub SceIme_stub
-  ScePgf_stub ScePvf_stub SceIofilemgr_stub m z png jpeg)
+  ScePgf_stub ScePvf_stub SceIofilemgr_stub png jpeg z m)
 vita_create_self(eboot.bin vita-cover-converter)
 vita_create_vpk(VitaCoverConverter.vpk ONURCOV01 eboot.bin
   VERSION "01.10" NAME "Vita Cover Converter"
