@@ -9,7 +9,7 @@ OUT = Path("build-assets/sce_sys")
 P = [(13, 22, 33), (18, 30, 42), (25, 45, 58), (32, 60, 74),
      (35, 99, 121), (30, 139, 158), (41, 196, 211), (58, 227, 232),
      (221, 250, 253), (115, 145, 158)]
-P += [(13 + i//2, 22 + i//2, 33 + i) for i in range(10, 42, 2)]
+P += [(round(13 + i*.5), round(22 + i*1.6), round(33 + i*1.9)) for i in range(48)]
 P += [(19, 43, 58)] * (256 - len(P))
 
 def png(path, w, h, pixels):
@@ -74,25 +74,46 @@ def symbol(c,cx,cy,scale):
     c.line(px+v(19),py+v(29),px+v(25),py+v(21),v(2),7)
     c.line(px+v(25),py+v(21),px+v(31),py+v(32),v(2),7)
 
-# Vital bubble image, palette PNG without alpha.
-c=Canvas(128,128)
-c.circle(64,63,61,1)
-symbol(c,65,65,0.72)
+def backdrop(w,h):
+    c=Canvas(w,h)
+    for y in range(h):
+        for x in range(w):
+            glow=math.exp(-5*((x/w-.30)**2+(y/h-.48)**2))
+            c.pix[y*w+x]=10+int(18*glow+12*(1-y/h))
+    return c
+
+c=backdrop(128,128)
+c.circle(64,64,52,3)
+c.circle(64,64,50,1)
+symbol(c,54,65,.79)
 png(OUT/"icon0.png",128,128,c.pix)
 
-# Splash image and LiveArea use same design language.
-for w,h,name in [(960,544,"pic0.png"),(840,500,"livearea/contents/bg0.png"),(280,158,"livearea/contents/startup.png")]:
-    c=Canvas(w,h)
-    c.rect(0,0,w,h,0)
-    c.rect(0,0,w,int(h*0.018),5)
-    c.circle(int(w*0.73),int(h*0.52),int(h*0.58),1)
-    c.circle(int(w*0.73),int(h*0.52),int(h*0.44),2)
-    symbol(c,int(w*0.5),int(h*0.51),min(w/225,h/145)*0.90)
+for w,h,name in [(960,544,"pic0.png"),(840,500,"livearea/contents/bg0.png")]:
+    c=backdrop(w,h)
+    for y in range(28,h,28):
+        for x in range(28,w,28):
+            c.circle(x,y,1,3)
+    for x in range(w):
+        envelope=math.sin(math.pi*x/w)**2
+        amplitude=int((.16+.84*abs(math.sin(x*.048)))*envelope*h*.13)
+        if x%7==0:
+            c.rect(x,h//2-amplitude,2,2*amplitude,4)
+    cx=w//2 if name=="pic0.png" else int(w*.28)
+    cy=int(h*.48)
+    c.roundrect(cx-121,cy-93,242,186,28,4)
+    c.roundrect(cx-119,cy-91,238,182,26,1)
+    symbol(c,cx-18,cy,1.55)
     png(OUT/name,w,h,c.pix)
+
+c=backdrop(280,158)
+c.roundrect(16,14,248,130,19,4)
+c.roundrect(18,16,244,126,17,1)
+symbol(c,126,72,1.25)
+png(OUT/"livearea/contents/startup.png",280,158,c.pix)
 
 (OUT/"livearea/contents/template.xml").write_text(
     '<?xml version="1.0" encoding="utf-8"?>\n'
-    '<livearea style="a1" format-ver="01.00" content-rev="3">\n'
+    '<livearea style="a1" format-ver="01.00" content-rev="4">\n'
     '  <livearea-background><image>bg0.png</image></livearea-background>\n'
     '  <gate><startup-image>startup.png</startup-image></gate>\n'
     '</livearea>\n',encoding="utf-8")

@@ -14,7 +14,7 @@ target_link_libraries(vita-cover-converter
   ScePgf_stub ScePvf_stub SceIofilemgr_stub png jpeg z m)
 vita_create_self(eboot.bin vita-cover-converter)
 vita_create_vpk(VitaCoverConverter.vpk ONURCOV01 eboot.bin
-  VERSION "01.10" NAME "Vita Cover Converter"
+  VERSION "01.11" NAME "Vita Cover Converter"
   FILE build-assets/sce_sys/icon0.png sce_sys/icon0.png
   FILE build-assets/sce_sys/pic0.png sce_sys/pic0.png
   FILE build-assets/sce_sys/livearea/contents/bg0.png sce_sys/livearea/contents/bg0.png

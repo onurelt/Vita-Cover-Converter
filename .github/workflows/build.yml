@@ -29,11 +29,16 @@ jobs:
         run: |
           python3 - <<'PY'
           import zipfile, struct
+          from xml.etree import ElementTree as ET
           path="build/VitaCoverConverter.vpk"
           with zipfile.ZipFile(path) as z:
               names=set(z.namelist())
               expected={"eboot.bin","sce_sys/icon0.png","sce_sys/pic0.png","sce_sys/livearea/contents/bg0.png","sce_sys/livearea/contents/startup.png","sce_sys/livearea/contents/template.xml"}
               assert expected<=names, f"Missing VPK entries: {expected-names}"
+              assert z.testzip() is None
+              root=ET.fromstring(z.read("sce_sys/livearea/contents/template.xml"))
+              for tag in ("livearea-background/image", "gate/startup-image"):
+                  assert "sce_sys/livearea/contents/" + root.findtext(tag) in names
               dims={"sce_sys/icon0.png":(128,128),"sce_sys/pic0.png":(960,544),
                     "sce_sys/livearea/contents/bg0.png":(840,500),
                     "sce_sys/livearea/contents/startup.png":(280,158)}
