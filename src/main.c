@@ -10,6 +10,8 @@
 #include <stdint.h>
 #include <ctype.h>
 #include <sys/stat.h>
+#include <jpeglib.h>
+#include <setjmp.h>
 
 #define SOURCE "ux0:data/VitaSend/received"
 #define DEST "ux0:data/SleepMixer/Music"
@@ -88,6 +90,45 @@ static int artwork(const char *mp3,const char *out) {
  }
  free(data);return result;
 }
+
+typedef struct {struct jpeg_error_mgr pub;jmp_buf jump;} JpegError;
+static void jpeg_fail(j_common_ptr c){JpegError *e=(JpegError*)c->err;longjmp(e->jump,1);}
+static int convert_cover(const char *input,const char *output){
+ FILE *in=fopen(input,"rb");if(!in)return -1;
+ struct jpeg_decompress_struct dec;JpegError err;unsigned char *pixels=NULL,*canvas=NULL;int ok=-1;
+ memset(&dec,0,sizeof(dec));dec.err=jpeg_std_error(&err.pub);err.pub.error_exit=jpeg_fail;
+ if(setjmp(err.jump)){goto done;}
+ jpeg_create_decompress(&dec);jpeg_stdio_src(&dec,in);jpeg_read_header(&dec,TRUE);
+ if(!dec.image_width||!dec.image_height||dec.image_width>4096||dec.image_height>4096){goto done;}
+ dec.out_color_space=JCS_RGB;jpeg_start_decompress(&dec);
+ size_t w=dec.output_width,h=dec.output_height;
+ if(w>4096||h>4096||w*h>16000000){goto done;}
+ pixels=malloc(w*h*3);canvas=calloc(256*256,3);
+ if(!pixels||!canvas)goto done;
+ while(dec.output_scanline<h){JSAMPROW row=pixels+(size_t)dec.output_scanline*w*3;jpeg_read_scanlines(&dec,&row,1);}
+ jpeg_finish_decompress(&dec);jpeg_destroy_decompress(&dec);memset(&dec,0,sizeof(dec));fclose(in);in=NULL;
+ int dw=256,dh=256;
+ if(w>=h)dh=(int)(h*256/w);else dw=(int)(w*256/h);
+ if(dw<1)dw=1;if(dh<1)dh=1;
+ for(int y=0;y<dh;y++)for(int x=0;x<dw;x++){
+  size_t sx=(size_t)x*w/dw,sy=(size_t)y*h/dh;
+  size_t src=(sy*w+sx)*3,dst=(((256-dh)/2+y)*256+(256-dw)/2+x)*3;
+  memcpy(canvas+dst,pixels+src,3);
+ }
+ FILE *out=fopen(output,"wb");if(!out)goto done;
+ struct jpeg_compress_struct enc;JpegError e2;memset(&enc,0,sizeof(enc));enc.err=jpeg_std_error(&e2.pub);e2.pub.error_exit=jpeg_fail;
+ if(setjmp(e2.jump)){fclose(out);remove(output);goto done;}
+ jpeg_create_compress(&enc);jpeg_stdio_dest(&enc,out);
+ enc.image_width=256;enc.image_height=256;enc.input_components=3;enc.in_color_space=JCS_RGB;
+ jpeg_set_defaults(&enc);jpeg_set_quality(&enc,88,TRUE);jpeg_start_compress(&enc,TRUE);
+ while(enc.next_scanline<256){JSAMPROW row=canvas+(size_t)enc.next_scanline*256*3;jpeg_write_scanlines(&enc,&row,1);}
+ jpeg_finish_compress(&enc);jpeg_destroy_compress(&enc);
+ ok=fclose(out)==0?0:-1;if(ok)remove(output);
+ done:
+ if(dec.mem)jpeg_destroy_decompress(&dec);
+ if(in)fclose(in);free(pixels);free(canvas);return ok;
+}
+
 static void prepare(void){
  number=next_number();if(number<0){strcpy(status,"No available folder number");return;}
  snprintf(source,sizeof(source),SOURCE "/%s",files[selected]);
@@ -98,10 +139,13 @@ static void prepare(void){
 static void save(void){
  sceIoMkdir("ux0:data/SleepMixer",0777);sceIoMkdir(DEST,0777);
  if(sceIoMkdir(destination,0777)<0){strcpy(status,"Folder exists or cannot be created");step=0;return;}
- char mp3[MAX_PATH],cover[MAX_PATH];snprintf(mp3,sizeof(mp3),"%s/%s",destination,files[selected]);
+ char mp3[MAX_PATH],cover[MAX_PATH],raw[MAX_PATH];snprintf(mp3,sizeof(mp3),"%s/%s",destination,files[selected]);
  snprintf(cover,sizeof(cover),"%s/cover.jpg",destination);
+ snprintf(raw,sizeof(raw),"%s/.artwork.tmp",destination);
  if(copy_file(source,mp3)){strcpy(status,"MP3 copy failed");sceIoRmdir(destination);step=0;return;}
- int art=artwork(source,cover);
+ int art=artwork(source,raw);
+ if(!art)art=convert_cover(raw,cover);
+ remove(raw);
  if(art){remove(mp3);sceIoRmdir(destination);snprintf(status,sizeof(status),"Artwork missing/unsupported (JPEG ID3v2.3/2.4 only)");step=0;return;}
  snprintf(status,sizeof(status),"Saved Track%04d with cover.jpg and MP3",number);
  step=0;
