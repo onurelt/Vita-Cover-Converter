@@ -59,11 +59,41 @@ static void scan(void) {
   sceIoDclose(d);
   snprintf(status,sizeof(status),"%d MP3 files found. X to select.",count);
 }
-static int next_number(void) {
-  for(int n=1;n<1000000;n++){char p[MAX_PATH];SceIoStat st;
-    snprintf(p,sizeof(p),DEST "/Track%04d",n);
-    if(sceIoGetstat(p,&st)<0)return n;
-  }return -1;
+static int parse_track_number(const char *name){
+ if(strncmp(name,"Track",5))return -1;
+ const char *p=name+5;if(!*p)return -1;
+ int n=0;for(;*p;p++){if(*p<'0'||*p>'9')return -1;if(n>999999)return -1;n=n*10+(*p-'0');}
+ return n>0?n:-1;
+}
+static void update_destination(void){
+ snprintf(destination,sizeof(destination),DEST "/Track%04d",number);
+}
+static int next_number(void){
+ int max=0;SceUID d=sceIoDopen(DEST);
+ if(d>=0){SceIoDirent e;while(1){memset(&e,0,sizeof(e));if(sceIoDread(d,&e)<=0)break;
+  int n=parse_track_number(e.d_name);if(n>max)max=n;
+ }sceIoDclose(d);}
+ return max<999999?max+1:-1;
+}
+static void scan_existing(void){
+ existing_count=0;int top[8]={0};SceUID d=sceIoDopen(DEST);
+ if(d<0)return;SceIoDirent e;
+ while(1){memset(&e,0,sizeof(e));if(sceIoDread(d,&e)<=0)break;
+  int n=parse_track_number(e.d_name);if(n<=0)continue;
+  for(int k=0;k<8;k++)if(n>top[k]){
+   for(int j=7;j>k;j--)top[j]=top[j-1];top[k]=n;break;
+  }
+ }
+ sceIoDclose(d);
+ for(int k=0;k<8&&top[k];k++){snprintf(existing[k],32,"Track%04d",top[k]);existing_count++;}
+}
+static void adjust_number(int delta){
+ if(number+delta<1||number+delta>999999)return;
+ number+=delta;update_destination();
+ SceIoStat st;
+ if(sceIoGetstat(destination,&st)>=0)
+  snprintf(status,sizeof(status),"Track%04d already exists. Choose another number.",number);
+ else snprintf(status,sizeof(status),"Destination updated: Track%04d",number);
 }
 static int copy_file(const char *a,const char *b) {
   FILE *in=fopen(a,"rb");if(!in)return -1;
@@ -156,13 +186,12 @@ static int convert_cover(const char *input,const char *output){
 static void prepare(void){
  number=next_number();if(number<0){strcpy(status,"No available folder number");return;}
  snprintf(source,sizeof(source),SOURCE "/%s",files[selected]);
- snprintf(destination,sizeof(destination),DEST "/Track%04d",number);
- existing_count=0; SceUID d=sceIoDopen(DEST); if(d>=0){SceIoDirent e;while(existing_count<8){memset(&e,0,sizeof(e));if(sceIoDread(d,&e)<=0)break;if(!strncmp(e.d_name,"Track",5)){snprintf(existing[existing_count],32,"%s",e.d_name);existing_count++;}}sceIoDclose(d);}
- step=1;snprintf(status,sizeof(status),"Confirm with X; Circle to cancel.");
+ update_destination();scan_existing();
+ step=1;snprintf(status,sizeof(status),"Confirm X; change folder number with LEFT / RIGHT.");
 }
 static void save(void){
  sceIoMkdir("ux0:data/SleepMixer",0777);sceIoMkdir(DEST,0777);
- if(sceIoMkdir(destination,0777)<0){strcpy(status,"Folder exists or cannot be created");step=0;return;}
+ SceIoStat existing_stat;if(sceIoGetstat(destination,&existing_stat)>=0){strcpy(status,"Folder already exists. Choose a different number.");return;}\n if(sceIoMkdir(destination,0777)<0){strcpy(status,"Cannot create destination folder");return;}
  char mp3[MAX_PATH],cover[MAX_PATH],raw[MAX_PATH];snprintf(mp3,sizeof(mp3),"%s/%s",destination,files[selected]);
  snprintf(cover,sizeof(cover),"%s/cover.jpg",destination);
  snprintf(raw,sizeof(raw),"%s/.artwork.tmp",destination);
@@ -219,7 +248,7 @@ int main(void){
    label_at(55,245,0.94f,DEST,RGBA(235,240,246,255));
    char folder[40];snprintf(folder,sizeof(folder),"Track%04d",number);
    rect(54,260,852,43,RGBA(36,76,89,255));
-   label_at(69,288,1.1f,folder,RGBA(255,255,255,255));
+   label_at(69,288,1.1f,folder,RGBA(255,255,255,255));\n   label_at(725,288,0.8f,"<  EDIT  >",RGBA(255,255,255,255));
    label_at(55,333,0.84f,"EXISTING TRACK FOLDERS",RGBA(160,179,196,255));
    if(!existing_count)label_at(55,363,0.87f,"No existing folders found",RGBA(183,192,203,255));
    for(int k=0;k<existing_count&&k<8;k++){
@@ -227,7 +256,7 @@ int main(void){
     label_at(x,y,0.85f,existing[k],RGBA(220,228,237,255));
    }
    label_at(55,446,0.8f,"MP3 + cover.jpg  |  No source files changed",RGBA(157,174,190,255));
-   footer("X  Confirm and save      O  Back");
+   footer("LEFT / RIGHT  Rename number     L / R  +/-10     X  Save     O  Back");
   }
   vita2d_end_drawing();vita2d_swap_buffers();
  }
