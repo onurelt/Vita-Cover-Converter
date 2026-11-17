@@ -11,11 +11,29 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install dependencies
         run: vdpm install libvita2d libjpeg-turbo libpng
+      - name: Test folder numbering and path safety
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -Isrc tests/core_test.c -o /tmp/core_test
+          /tmp/core_test
+      - name: Generate new Vita icon and LiveArea artwork
+        run: python3 tools/make_assets.py
       - name: Configure
         run: cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
       - name: Build
         run: cmake --build build --parallel 2
+      - name: Verify installable VPK archive
+        run: |
+          python3 - <<'PY'
+          import zipfile
+          path="build/VitaCoverConverter.vpk"
+          with zipfile.ZipFile(path) as z:
+              names=set(z.namelist())
+              expected={"eboot.bin","sce_sys/icon0.png","sce_sys/pic0.png","sce_sys/livearea/contents/bg0.png","sce_sys/livearea/contents/startup.png","sce_sys/livearea/contents/template.xml"}
+              assert expected<=names, f"Missing VPK entries: {expected-names}"
+              for item in sorted(expected):print(item)
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: VitaCoverConverter-VPK
           path: build/VitaCoverConverter.vpk
+          if-no-files-found: error

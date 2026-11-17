@@ -1,4 +1,10 @@
 #include <psp2/ctrl.h>
+#include <psp2/touch.h>
+#include <psp2/ime_dialog.h>
+#include <psp2/sysmodule.h>
+#include <psp2/common_dialog.h>
+#include "artwork.h"
+#include "core.h"
 #include <psp2/io/dirent.h>
 #include <psp2/io/stat.h>
 #include <psp2/io/fcntl.h>
@@ -18,6 +24,13 @@
 #define MAX_FILES 256
 #define MAX_PATH 512
 static char files[MAX_FILES][256];
+static unsigned char is_folder[MAX_FILES];
+static char browse_dir[MAX_PATH]=SOURCE,folder_name[64];
+static vita2d_texture *preview=NULL;
+static char preview_path[MAX_PATH];
+static int preview_png=0,keyboard=0;
+static SceWChar16 initial_name[64],typed_name[64];
+static SceTouchPanelInfo touch_info;
 static int count=0,selected=0,step=0,number=1;
 static char status[256]="Select an MP3 (X). Circle exits.";
 static char destination[MAX_PATH],source[MAX_PATH];
@@ -49,37 +62,48 @@ static void footer(const char *hint){
  label_at(37,530,0.76f,short_status,RGBA(184,195,205,255));
 }
 static int ends_mp3(const char *s) {size_t n=strlen(s);return n>4 && !strcasecmp(s+n-4,".mp3");}
-static void scan(void) {
-  count=0;selected=0;
-  SceUID d=sceIoDopen(SOURCE);if(d<0){snprintf(status,sizeof(status),"Cannot open %s",SOURCE);return;}
-  SceIoDirent ent;
-  while(count<MAX_FILES) {memset(&ent,0,sizeof(ent));if(sceIoDread(d,&ent)<=0)break;
-    if(ends_mp3(ent.d_name)){snprintf(files[count],sizeof(files[count]),"%s",ent.d_name);count++;}
+static int is_dir(const SceIoDirent *e){return SCE_S_ISDIR(e->d_stat.st_mode);}
+static void scan(void){
+ count=selected=0;
+ SceUID d=sceIoDopen(browse_dir);
+ if(d<0){snprintf(status,sizeof(status),"Cannot open %s",browse_dir);return;}
+ SceIoDirent e;
+ while(count<MAX_FILES){
+  memset(&e,0,sizeof(e));if(sceIoDread(d,&e)<=0)break;
+  if(e.d_name[0]=='.')continue;
+  int dir=is_dir(&e);
+  if(!dir&&!ends_mp3(e.d_name))continue;
+  snprintf(files[count],sizeof(files[count]),"%s",e.d_name);
+  is_folder[count++]=dir;
+ }
+ sceIoDclose(d);
+ for(int i=0;i<count;i++)for(int j=i+1;j<count;j++)
+  if(is_folder[j]>is_folder[i]||(is_folder[j]==is_folder[i]&&strcasecmp(files[j],files[i])<0)){
+   char tmp[256];memcpy(tmp,files[i],256);memcpy(files[i],files[j],256);memcpy(files[j],tmp,256);
+   unsigned char b=is_folder[i];is_folder[i]=is_folder[j];is_folder[j]=b;
+  }
+ snprintf(status,sizeof(status),"%d items found. X to open. Triangle to refresh.",count);
+}
+static void update_destination(void){snprintf(destination,sizeof(destination),"%s/%s",DEST,folder_name);}
+static int next_number(void){
+ int max=0;SceUID d=sceIoDopen(DEST);SceIoDirent e;
+ if(d>=0){
+  while(1){
+   memset(&e,0,sizeof(e));if(sceIoDread(d,&e)<=0)break;
+   if(!is_dir(&e))continue;
+   int n=vcc_track_number(e.d_name);if(n>max)max=n;
   }
   sceIoDclose(d);
-  snprintf(status,sizeof(status),"%d MP3 files found. X to select.",count);
-}
-static int parse_track_number(const char *name){
- if(strncmp(name,"Track",5))return -1;
- const char *p=name+5;if(!*p)return -1;
- int n=0;for(;*p;p++){if(*p<'0'||*p>'9')return -1;if(n>999999)return -1;n=n*10+(*p-'0');}
- return n>0?n:-1;
-}
-static void update_destination(void){
- snprintf(destination,sizeof(destination),DEST "/Track%04d",number);
-}
-static int next_number(void){
- int max=0;SceUID d=sceIoDopen(DEST);
- if(d>=0){SceIoDirent e;while(1){memset(&e,0,sizeof(e));if(sceIoDread(d,&e)<=0)break;
-  int n=parse_track_number(e.d_name);if(n>max)max=n;
- }sceIoDclose(d);}
+ }
  return max<999999?max+1:-1;
 }
 static void scan_existing(void){
- existing_count=0;int top[8]={0};SceUID d=sceIoDopen(DEST);
- if(d<0)return;SceIoDirent e;
- while(1){memset(&e,0,sizeof(e));if(sceIoDread(d,&e)<=0)break;
-  int n=parse_track_number(e.d_name);if(n<=0)continue;
+ existing_count=0;int top[8]={0};SceUID d=sceIoDopen(DEST);SceIoDirent e;
+ if(d<0)return;
+ while(1){
+  memset(&e,0,sizeof(e));if(sceIoDread(d,&e)<=0)break;
+  if(!is_dir(&e))continue;
+  int n=vcc_track_number(e.d_name);if(n<1)continue;
   for(int k=0;k<8;k++)if(n>top[k]){
    for(int j=7;j>k;j--)top[j]=top[j-1];top[k]=n;break;
   }
@@ -89,11 +113,10 @@ static void scan_existing(void){
 }
 static void adjust_number(int delta){
  if(number+delta<1||number+delta>999999)return;
- number+=delta;update_destination();
+ number+=delta;snprintf(folder_name,sizeof(folder_name),"Track%04d",number);update_destination();
  SceIoStat st;
- if(sceIoGetstat(destination,&st)>=0)
-  snprintf(status,sizeof(status),"Track%04d already exists. Choose another number.",number);
- else snprintf(status,sizeof(status),"Destination updated: Track%04d",number);
+ if(sceIoGetstat(destination,&st)>=0)strcpy(status,"Folder exists. Choose another.");
+ else snprintf(status,sizeof(status),"Destination: %s",folder_name);
 }
 static int copy_file(const char *a,const char *b) {
   FILE *in=fopen(a,"rb");if(!in)return -1;
@@ -104,47 +127,7 @@ static int copy_file(const char *a,const char *b) {
   if(fclose(out))ok=-1;
   fclose(in);if(ok)remove(b);return ok;
 }
-static uint32_t synchsafe(const unsigned char *p) {
- return ((uint32_t)(p[0]&127)<<21)|((uint32_t)(p[1]&127)<<14)|((uint32_t)(p[2]&127)<<7)|(p[3]&127);
-}
-static uint32_t be32(const unsigned char *p) {
- return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];
-}
-/* Extracts JPEG APIC from ID3v2.3/v2.4. Unsupported PNG artwork is rejected safely. */
-static int artwork(const char *mp3,const char *out) {
- FILE *f=fopen(mp3,"rb");if(!f)return -1;
- unsigned char h[10];if(fread(h,1,10,f)!=10||memcmp(h,"ID3",3)||h[3]<3||h[3]>4){fclose(f);return -2;}
- int ver=h[3];uint32_t size=synchsafe(h+6);
- if(size>16*1024*1024||size<10||h[5]&0x80){fclose(f);return -2;}
- unsigned char *data=malloc(size);if(!data){fclose(f);return -1;}
- if(fread(data,1,size,f)!=size){free(data);fclose(f);return -1;}fclose(f);
- int result=-2;
- for(size_t pos=0;pos+10<=size;) {
-  unsigned char *p=data+pos;
-  if(!p[0])break;
-  uint32_t len=ver==4?synchsafe(p+4):be32(p+4);
-  if(len>size-pos-10)break;
-  if(!memcmp(p,"APIC",4)&&len>12&&!(p[9]&0x0c)) {
-   unsigned char *q=p+10,*end=q+len;
-   int enc=*q++;unsigned char *mime=q;
-   while(q<end&&*q)q++;
-   if(q>=end)break;
-   int jpeg=(!strcmp((char*)mime,"image/jpeg")||!strcmp((char*)mime,"image/jpg"));
-   q++;if(q>=end)break;q++; /* picture type */
-   if(enc==0||enc==3){while(q<end&&*q)q++;if(q<end)q++;}
-   else {while(q+1<end&&(q[0]||q[1]))q+=2;q+=2;}
-   if(q+2<=end&&jpeg&&q[0]==0xff&&q[1]==0xd8) {
-    FILE *o=fopen(out,"wb");if(!o){result=-1;break;}
-    size_t bytes=(size_t)(end-q);
-    int wrote=(fwrite(q,1,bytes,o)==bytes); int closed=(fclose(o)==0); result=(wrote&&closed)?0:-1;
-    if(result)remove(out);
-   }break;
-  }
-  pos+=10+len;
- }
- free(data);return result;
-}
-
+/* Artwork extraction is implemented in artwork.c. */
 typedef struct {struct jpeg_error_mgr pub;jmp_buf jump;} JpegError;
 static void jpeg_fail(j_common_ptr c){JpegError *e=(JpegError*)c->err;longjmp(e->jump,1);}
 static int convert_cover(const char *input,const char *output){
@@ -183,84 +166,222 @@ static int convert_cover(const char *input,const char *output){
  if(in)fclose(in);free(pixels);free(canvas);return ok;
 }
 
+static void reset_preview(void){
+ if(preview){vita2d_free_texture(preview);preview=NULL;}
+ if(preview_path[0]){remove(preview_path);preview_path[0]=0;}
+}
+static void go_back(void){
+ if(!strcmp(browse_dir,SOURCE))return;
+ char *p=strrchr(browse_dir,'/');
+ if(!p||p<=browse_dir+strlen(SOURCE))strcpy(browse_dir,SOURCE);
+ else *p=0;
+ scan();
+}
 static void prepare(void){
- number=next_number();if(number<0){strcpy(status,"No available folder number");return;}
- snprintf(source,sizeof(source),SOURCE "/%s",files[selected]);
+ if(count==0)return;
+ if(is_folder[selected]){
+  char next[MAX_PATH];
+  if(snprintf(next,sizeof(next),"%s/%s",browse_dir,files[selected])>=(int)sizeof(next)){
+   strcpy(status,"Path too long.");return;
+  }
+  snprintf(browse_dir,sizeof(browse_dir),"%s",next);scan();return;
+ }
+ sceIoMkdir("ux0:data/VitaCoverConverter",0777);
+ sceIoMkdir("ux0:data/SleepMixer",0777);
+ sceIoMkdir(DEST,0777);
+ number=next_number();
+ if(number<0){strcpy(status,"No available Track number.");return;}
+ snprintf(folder_name,sizeof(folder_name),"Track%04d",number);
  update_destination();scan_existing();
- step=1;snprintf(status,sizeof(status),"Confirm X; change folder number with LEFT / RIGHT.");
+ if(snprintf(source,sizeof(source),"%s/%s",browse_dir,files[selected])>=(int)sizeof(source)){
+  strcpy(status,"MP3 path too long.");return;
+ }
+ reset_preview();
+ int fmt=0;
+ const char *tmp="ux0:data/VitaCoverConverter/artwork.tmp";
+ int rc=vcc_extract_artwork(source,tmp,&fmt);
+ if(rc){remove(tmp);snprintf(status,sizeof(status),rc==-2?
+      "No embedded JPEG/PNG artwork in this MP3.":"Could not read the MP3 artwork.");return;}
+ preview_png=fmt;snprintf(preview_path,sizeof(preview_path),"%s",tmp);
+ preview=fmt?vita2d_load_PNG_file(tmp):vita2d_load_JPEG_file(tmp);
+ if(!preview){reset_preview();strcpy(status,"Embedded image cannot be displayed.");return;}
+ step=1;strcpy(status,"Review the cover and folder before saving.");
+}
+static void rename_folder(void){
+ memset(initial_name,0,sizeof(initial_name));memset(typed_name,0,sizeof(typed_name));
+ for(int i=0;i<48&&folder_name[i];i++)initial_name[i]=(unsigned char)folder_name[i];
+ SceImeDialogParam p;sceImeDialogParamInit(&p);
+ p.supportedLanguages=0;p.languagesForced=SCE_FALSE;
+ p.type=SCE_IME_TYPE_DEFAULT;
+ p.textBoxMode=SCE_IME_DIALOG_TEXTBOX_MODE_WITH_CLEAR;
+ p.title=u"Folder name";
+ p.maxTextLength=48;p.initialText=initial_name;p.inputTextBuffer=typed_name;
+ int rc=sceImeDialogInit(&p);
+ if(rc>=0)keyboard=1;
+ else snprintf(status,sizeof(status),"Vita keyboard unavailable: %08X",(unsigned)rc);
+}
+static void poll_keyboard(void){
+ if(!keyboard||sceImeDialogGetStatus()!=SCE_COMMON_DIALOG_STATUS_FINISHED)return;
+ SceImeDialogResult result;memset(&result,0,sizeof(result));
+ sceImeDialogGetResult(&result);sceImeDialogTerm();keyboard=0;
+ if(result.button!=SCE_IME_DIALOG_BUTTON_ENTER)return;
+ char new_name[64]={0};int valid=1;
+ for(int i=0;i<48&&typed_name[i];i++){
+  if(typed_name[i]>127){valid=0;break;}
+  new_name[i]=(char)typed_name[i];
+ }
+ if(!valid||!vcc_valid_folder(new_name)){
+  strcpy(status,"Name must use 1-48 letters/numbers/spaces, - or _.");return;
+ }
+ snprintf(folder_name,sizeof(folder_name),"%s",new_name);update_destination();
+ SceIoStat st;
+ if(sceIoGetstat(destination,&st)>=0)strcpy(status,"That folder already exists. Rename again.");
+ else snprintf(status,sizeof(status),"Destination renamed: %s",folder_name);
 }
 static void save(void){
+ if(!preview||!vcc_valid_folder(folder_name)){strcpy(status,"Missing cover or invalid name.");return;}
  sceIoMkdir("ux0:data/SleepMixer",0777);sceIoMkdir(DEST,0777);
- SceIoStat existing_stat;if(sceIoGetstat(destination,&existing_stat)>=0){strcpy(status,"Folder already exists. Choose a different number.");return;}
- if(sceIoMkdir(destination,0777)<0){strcpy(status,"Cannot create destination folder");return;}
- char mp3[MAX_PATH],cover[MAX_PATH],raw[MAX_PATH];snprintf(mp3,sizeof(mp3),"%s/%s",destination,files[selected]);
- snprintf(cover,sizeof(cover),"%s/cover.jpg",destination);
- snprintf(raw,sizeof(raw),"%s/.artwork.tmp",destination);
- if(copy_file(source,mp3)){strcpy(status,"MP3 copy failed");sceIoRmdir(destination);step=0;return;}
- int art=artwork(source,raw);
- if(!art)art=convert_cover(raw,cover);
- remove(raw);
- if(art){remove(mp3);sceIoRmdir(destination);snprintf(status,sizeof(status),"Artwork missing/unsupported (JPEG ID3v2.3/2.4 only)");step=0;return;}
- snprintf(status,sizeof(status),"Saved Track%04d with cover.jpg and MP3",number);
- step=0;
+ SceIoStat st;
+ if(sceIoGetstat(destination,&st)>=0){strcpy(status,"Folder already exists. Nothing overwritten.");return;}
+ if(sceIoMkdir(destination,0777)<0){strcpy(status,"Cannot create destination folder.");return;}
+ char mp3[MAX_PATH],partial[MAX_PATH],cover[MAX_PATH],partial_cover[MAX_PATH];
+ int a=snprintf(mp3,sizeof(mp3),"%s/%s",destination,files[selected]);
+ int b=snprintf(partial,sizeof(partial),"%s/.copy.part",destination);
+ int c=snprintf(cover,sizeof(cover),"%s/cover.jpg",destination);
+ int d=snprintf(partial_cover,sizeof(partial_cover),"%s/.cover.part",destination);
+ if(a<0||b<0||c<0||d<0||a>=(int)sizeof(mp3)||b>=(int)sizeof(partial)||
+    c>=(int)sizeof(cover)||d>=(int)sizeof(partial_cover)){
+  sceIoRmdir(destination);strcpy(status,"Output path too long.");return;
+ }
+ int ok=copy_file(source,partial)==0;
+ if(ok)ok=(preview_png?vcc_png_to_jpeg(preview_path,partial_cover):
+                          convert_cover(preview_path,partial_cover))==0;
+ if(ok)ok=sceIoRename(partial,mp3)>=0;
+ if(ok)ok=sceIoRename(partial_cover,cover)>=0;
+ if(!ok){
+  remove(partial);remove(partial_cover);remove(mp3);remove(cover);
+  sceIoRmdir(destination);
+  strcpy(status,"Save failed; cleaned incomplete destination.");return;
+ }
+ snprintf(status,sizeof(status),"Saved %s with MP3 and cover.jpg.",folder_name);
+ reset_preview();step=0;
+}
+static void draw_preview(int x,int y,int box){
+ rect(x,y,box,box,RGBA(30,47,60,255));
+ if(!preview)return;
+ float w=vita2d_texture_get_width(preview),h=vita2d_texture_get_height(preview);
+ if(w<1||h<1)return;
+ float scale=box/w;if(h*scale>box)scale=box/h;
+ vita2d_draw_texture_scale(preview,x+(box-w*scale)/2,y+(box-h*scale)/2,scale,scale);
+}
+static int list_first(void){
+ int first=selected-3;if(first<0)first=0;
+ if(first>count-7)first=count-7;if(first<0)first=0;return first;
+}
+static void draw_browser(void){
+ header("01  /  SELECT MP3");
+ panel(35,111,555,352);
+ label_at(54,141,0.88f,"MP3 FILES",RGBA(94,210,227,255));
+ char short_path[85];trim_label(short_path,sizeof(short_path),browse_dir,52);
+ label_at(54,165,0.79f,short_path,RGBA(160,177,192,255));
+ rect(52,179,520,1,RGBA(53,68,83,255));
+ if(!count)label_at(58,237,1.0f,"No MP3 files found. Triangle to refresh.",RGBA(230,239,245,255));
+ int first=list_first();
+ for(int j=0;j<7&&first+j<count;j++){
+  int i=first+j,y=188+j*36;
+  if(i==selected){rect(49,y,525,34,RGBA(35,81,99,255));rect(49,y,4,34,RGBA(74,219,234,255));}
+  char name[90],row[110];trim_label(name,sizeof(name),files[i],47);
+  snprintf(row,sizeof(row),"%s %s",is_folder[i]?"[DIR]":" MP3 ",name);
+  label_at(59,y+24,0.91f,row,i==selected?RGBA(254,255,255,255):RGBA(188,202,215,255));
+ }
+ panel(606,111,318,352);
+ label_at(632,146,0.89f,"COVER ARTWORK",RGBA(94,210,227,255));
+ rect(632,173,267,224,RGBA(27,44,57,255));
+ label_at(667,287,1.08f,"MP3  TO  COVER",RGBA(193,211,222,255));
+ label_at(630,429,0.81f,"Select a track for a preview",RGBA(163,179,192,255));
+ footer("UP/DOWN  Browse      X  Open/Preview      O  Back      TRIANGLE  Refresh");
+}
+static void draw_review(void){
+ header("02  /  REVIEW");
+ panel(35,111,889,352);
+ draw_preview(56,132,286);
+ char short_name[110];trim_label(short_name,sizeof(short_name),files[selected],35);
+ label_at(57,447,0.81f,short_name,RGBA(232,241,248,255));
+ label_at(377,144,0.9f,"DESTINATION FOLDER",RGBA(96,210,228,255));
+ rect(377,165,511,70,RGBA(38,56,70,255));
+ label_at(396,210,1.36f,folder_name,RGBA(255,255,255,255));
+ label_at(835,207,0.78f,"EDIT",RGBA(102,221,233,255));
+ label_at(379,261,0.85f,"ux0:data/SleepMixer/Music/",RGBA(184,195,207,255));
+ label_at(378,296,0.85f,"EXISTING TRACK FOLDERS",RGBA(156,174,190,255));
+ if(!existing_count)label_at(378,328,0.80f,"No existing Track folders",RGBA(159,177,190,255));
+ for(int k=0;k<existing_count&&k<8;k++){
+  int x=378+(k%4)*127,y=310+(k/4)*32;
+  rect(x,y,119,27,RGBA(39,58,72,255));
+  label_at(x+7,y+19,0.72f,existing[k],RGBA(225,233,241,255));
+ }
+ rect(377,386,511,54,RGBA(25,115,135,255));
+ label_at(526,423,1.25f,"CONFIRM & SAVE",RGBA(255,255,255,255));
+ footer("X  Confirm      O  Back      TRIANGLE  Rename      L/R  Change number");
+}
+static void touch_action(int x,int y){
+ if(!step){
+  if(x>=49&&x<575&&y>=188&&y<440){
+   int row=(y-188)/36+list_first();
+   if(row>=0&&row<count){if(row==selected)prepare();else selected=row;}
+  }else if(y>480&&x>750)scan();
+ }else{
+  if(x>=377&&x<890&&y>=165&&y<=235)rename_folder();
+  else if(x>=377&&x<890&&y>=386&&y<=440)save();
+ }
 }
 int main(void){
  sceCtrlSetSamplingMode(SCE_CTRL_MODE_DIGITAL);
- vita2d_init();font=vita2d_load_default_pgf();scan();
- unsigned old=0;
+ sceTouchSetSamplingState(SCE_TOUCH_PORT_FRONT,SCE_TOUCH_SAMPLING_STATE_START);
+ memset(&touch_info,0,sizeof(touch_info));
+ sceTouchGetPanelInfo(SCE_TOUCH_PORT_FRONT,&touch_info);
+ sceSysmoduleLoadModule(SCE_SYSMODULE_IME);
+ vita2d_init();vita2d_set_clear_color(RGBA(14,21,31,255));
+ font=vita2d_load_default_pgf();scan();
+ unsigned old=0;int was_touch=0;
  while(1){
   SceCtrlData pad;memset(&pad,0,sizeof(pad));sceCtrlPeekBufferPositive(0,&pad,1);
   unsigned pressed=pad.buttons&~old;old=pad.buttons;
-  if(step==0){
-   if((pressed&SCE_CTRL_DOWN)&&selected<count-1)selected++;
-   if((pressed&SCE_CTRL_UP)&&selected>0)selected--;
-   if((pressed&SCE_CTRL_CROSS)&&count)prepare();
-   if(pressed&SCE_CTRL_CIRCLE)break;
-  }else{
-   if(pressed&SCE_CTRL_CIRCLE)step=0;
-   if(pressed&SCE_CTRL_CROSS)save();
-  }
+  if(!keyboard){
+   if(step==0){
+    if((pressed&SCE_CTRL_DOWN)&&selected<count-1)selected++;
+    if((pressed&SCE_CTRL_UP)&&selected>0)selected--;
+    if(pressed&SCE_CTRL_CROSS)prepare();
+    if(pressed&SCE_CTRL_TRIANGLE)scan();
+    if(pressed&SCE_CTRL_CIRCLE){
+     if(!strcmp(browse_dir,SOURCE))break;
+     go_back();
+    }
+   }else{
+    if(pressed&SCE_CTRL_CIRCLE){step=0;reset_preview();}
+    else if(pressed&SCE_CTRL_CROSS)save();
+    else if(pressed&SCE_CTRL_TRIANGLE)rename_folder();
+    else if(pressed&SCE_CTRL_LTRIGGER)adjust_number(-1);
+    else if(pressed&SCE_CTRL_RTRIGGER)adjust_number(1);
+   }
+   SceTouchData t;memset(&t,0,sizeof(t));
+   sceTouchPeek(SCE_TOUCH_PORT_FRONT,&t,1);
+   if(t.reportNum&&!was_touch){
+    int dx=touch_info.maxDispX-touch_info.minDispX;
+    int dy=touch_info.maxDispY-touch_info.minDispY;
+    int x=dx>0?(t.report[0].x-touch_info.minDispX)*960/dx:t.report[0].x/2;
+    int y=dy>0?(t.report[0].y-touch_info.minDispY)*544/dy:t.report[0].y/2;
+    touch_action(x,y);
+   }
+   was_touch=t.reportNum>0;
+  }else{poll_keyboard();was_touch=1;}
   vita2d_start_drawing();vita2d_clear_screen();
-  header(step?"02  /  CONFIRM DESTINATION":"01  /  SELECT MP3");
-  if(!step){
-   panel(35,112,890,348);
-   label_at(53,141,0.86f,"SOURCE  ux0:data/VitaSend/received",RGBA(163,181,196,255));
-   label_at(845,141,0.85f,"MP3",RGBA(109,211,230,255));
-   rect(52,151,856,1,RGBA(53,64,79,255));
-   if(!count)label_at(56,215,1.0f,"No MP3 files found in the source folder.",RGBA(230,235,242,255));
-   int first=selected-4;if(first<0)first=0;
-   if(first>count-8)first=count-8;if(first<0)first=0;
-   for(int j=0;j<8&&first+j<count;j++){
-    int i=first+j,y=158+j*36;
-    if(i==selected){rect(48,y,864,33,RGBA(37,80,98,255));rect(48,y,4,33,RGBA(100,218,238,255));}
-    char name[100];trim_label(name,sizeof(name),files[i],75);
-    label_at(65,y+23,0.91f,name,i==selected?RGBA(255,255,255,255):RGBA(190,201,214,255));
-   }
-   char counter[60];snprintf(counter,sizeof(counter),"%d FILES   |   %d / %d",count,count?selected+1:0,count);
-   label_at(710,448,0.79f,counter,RGBA(154,169,185,255));
-   footer("UP / DOWN  Browse      X  Select      O  Exit");
-  }else{
-   panel(35,112,890,348);
-   label_at(55,145,0.9f,"SELECTED TRACK",RGBA(109,211,230,255));
-   char track[100];trim_label(track,sizeof(track),files[selected],76);
-   label_at(55,172,1.04f,track,RGBA(248,250,252,255));
-   rect(52,188,856,1,RGBA(53,64,79,255));
-   label_at(55,219,0.86f,"SAVE LOCATION",RGBA(109,211,230,255));
-   label_at(55,245,0.94f,DEST,RGBA(235,240,246,255));
-   char folder[40];snprintf(folder,sizeof(folder),"Track%04d",number);
-   rect(54,260,852,43,RGBA(36,76,89,255));
-   label_at(69,288,1.1f,folder,RGBA(255,255,255,255));
-   label_at(725,288,0.8f,"<  EDIT  >",RGBA(255,255,255,255));
-   label_at(55,333,0.84f,"EXISTING TRACK FOLDERS",RGBA(160,179,196,255));
-   if(!existing_count)label_at(55,363,0.87f,"No existing folders found",RGBA(183,192,203,255));
-   for(int k=0;k<existing_count&&k<8;k++){
-    int x=55+(k%4)*214,y=365+(k/4)*35;
-    label_at(x,y,0.85f,existing[k],RGBA(220,228,237,255));
-   }
-   label_at(55,446,0.8f,"MP3 + cover.jpg  |  No source files changed",RGBA(157,174,190,255));
-   footer("LEFT / RIGHT  Rename number     L / R  +/-10     X  Save     O  Back");
-  }
-  vita2d_end_drawing();vita2d_swap_buffers();
+  if(step)draw_review();else draw_browser();
+  vita2d_end_drawing();
+  if(keyboard)vita2d_common_dialog_update();
+  vita2d_swap_buffers();
  }
- vita2d_free_pgf(font);vita2d_fini();sceKernelExitProcess(0);return 0;
+ if(keyboard)sceImeDialogTerm();
+ reset_preview();vita2d_free_pgf(font);vita2d_fini();
+ sceSysmoduleUnloadModule(SCE_SYSMODULE_IME);
+ sceKernelExitProcess(0);return 0;
 }
