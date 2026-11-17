@@ -17,7 +17,7 @@
 static char files[MAX_FILES][256];
 static int count=0,selected=0,step=0,number=1;
 static char status[256]="Select an MP3 (X). Circle exits.";
-static char destination[MAX_PATH],source[MAX_PATH];
+static char destination[MAX_PATH],source[MAX_PATH];\nstatic char existing[8][32]; static int existing_count=0;
 static vita2d_pgf *font;
 static void line(int y,const char *s,uint32_t color) {vita2d_pgf_draw_text(font,35,y,color,1.1f,s);}
 static int ends_mp3(const char *s) {size_t n=strlen(s);return n>4 && !strcasecmp(s+n-4,".mp3");}
@@ -78,7 +78,7 @@ static int artwork(const char *mp3,const char *out) {
    if(q+2<=end&&jpeg&&q[0]==0xff&&q[1]==0xd8) {
     FILE *o=fopen(out,"wb");if(!o){result=-1;break;}
     size_t bytes=(size_t)(end-q);
-    result=(fwrite(q,1,bytes,o)==bytes&&fclose(o)==0)?0:-1;
+    int wrote=(fwrite(q,1,bytes,o)==bytes); int closed=(fclose(o)==0); result=(wrote&&closed)?0:-1;
     if(result)remove(out);
    }break;
   }
@@ -90,7 +90,7 @@ static void prepare(void){
  number=next_number();if(number<0){strcpy(status,"No available folder number");return;}
  snprintf(source,sizeof(source),SOURCE "/%s",files[selected]);
  snprintf(destination,sizeof(destination),DEST "/Track%04d",number);
- step=1;snprintf(status,sizeof(status),"Confirm with X; Circle to cancel.");
+ existing_count=0; SceUID d=sceIoDopen(DEST); if(d>=0){SceIoDirent e;while(existing_count<8){memset(&e,0,sizeof(e));if(sceIoDread(d,&e)<=0)break;if(!strncmp(e.d_name,"Track",5)){snprintf(existing[existing_count],32,"%s",e.d_name);existing_count++;}}sceIoDclose(d);}\n step=1;snprintf(status,sizeof(status),"Confirm with X; Circle to cancel.");
 }
 static void save(void){
  sceIoMkdir("ux0:data/SleepMixer",0777);sceIoMkdir(DEST,0777);
@@ -131,9 +131,9 @@ int main(void){
    line(145,"Destination preview:",0xff55ddff);
    line(180,DEST,0xffffffff);
    line(215,destination,0xffffffff);
-   line(260,"New folder contains original MP3 + cover.jpg",0xffdddddd);
-   line(300,"Existing folders are never overwritten.",0xffdddddd);
-   line(350,"X Confirm / Circle Cancel",0xff55ddff);
+   line(260,"Existing folders (up to 8):",0xffdddddd);\n   for(int k=0;k<existing_count;k++)line(286+k*21,existing[k],0xffaaaaaa);
+   
+   line(460,"X Confirm / Circle Cancel",0xff55ddff);
   }
   line(480,status,0xffdddddd);
   vita2d_end_drawing();vita2d_swap_buffers();
