@@ -191,7 +191,8 @@ static void prepare(void){
 }
 static void save(void){
  sceIoMkdir("ux0:data/SleepMixer",0777);sceIoMkdir(DEST,0777);
- SceIoStat existing_stat;if(sceIoGetstat(destination,&existing_stat)>=0){strcpy(status,"Folder already exists. Choose a different number.");return;}\n if(sceIoMkdir(destination,0777)<0){strcpy(status,"Cannot create destination folder");return;}
+ SceIoStat existing_stat;if(sceIoGetstat(destination,&existing_stat)>=0){strcpy(status,"Folder already exists. Choose a different number.");return;}
+ if(sceIoMkdir(destination,0777)<0){strcpy(status,"Cannot create destination folder");return;}
  char mp3[MAX_PATH],cover[MAX_PATH],raw[MAX_PATH];snprintf(mp3,sizeof(mp3),"%s/%s",destination,files[selected]);
  snprintf(cover,sizeof(cover),"%s/cover.jpg",destination);
  snprintf(raw,sizeof(raw),"%s/.artwork.tmp",destination);
@@ -248,7 +249,8 @@ int main(void){
    label_at(55,245,0.94f,DEST,RGBA(235,240,246,255));
    char folder[40];snprintf(folder,sizeof(folder),"Track%04d",number);
    rect(54,260,852,43,RGBA(36,76,89,255));
-   label_at(69,288,1.1f,folder,RGBA(255,255,255,255));\n   label_at(725,288,0.8f,"<  EDIT  >",RGBA(255,255,255,255));
+   label_at(69,288,1.1f,folder,RGBA(255,255,255,255));
+   label_at(725,288,0.8f,"<  EDIT  >",RGBA(255,255,255,255));
    label_at(55,333,0.84f,"EXISTING TRACK FOLDERS",RGBA(160,179,196,255));
    if(!existing_count)label_at(55,363,0.87f,"No existing folders found",RGBA(183,192,203,255));
    for(int k=0;k<existing_count&&k<8;k++){
