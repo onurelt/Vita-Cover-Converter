@@ -33,9 +33,10 @@ jobs:
           path="build/VitaCoverConverter.vpk"
           with zipfile.ZipFile(path) as z:
               names=set(z.namelist())
-              expected={"eboot.bin","sce_sys/icon0.png","sce_sys/pic0.png","sce_sys/livearea/contents/bg0.png","sce_sys/livearea/contents/startup.png","sce_sys/livearea/contents/template.xml"}
+              expected={"eboot.bin","sce_sys/icon0.png","sce_sys/pic0.png","sce_sys/livearea/contents/bg0.png","sce_sys/livearea/contents/startup.png","sce_sys/livearea/contents/template.xml","data/app_background.jpg"}
               assert expected<=names, f"Missing VPK entries: {expected-names}"
               assert z.testzip() is None
+              assert z.read("data/app_background.jpg").startswith(bytes((255,216,255))), "Missing runtime photo background"
               root=ET.fromstring(z.read("sce_sys/livearea/contents/template.xml"))
               for tag in ("livearea-background/image", "gate/startup-image"):
                   assert "sce_sys/livearea/contents/" + root.findtext(tag) in names
